@@ -1,0 +1,76 @@
+/* 修改選取範圍的條顏色 */
+.rc-slider-track {
+  background-color: #454141 !important;
+}
+
+/* 修改滑動點的顏色 */
+.rc-slider-handle {
+  border-color: #454141 !important;
+  background-color: #c7bfbf !important;
+}
+
+/* 修改未選取軌道的顏色 */
+.rc-slider-rail {
+  background-color: #c7bfbf !important;
+}
+
+/* 修改所有刻度點的預設顏色 (未選取時) */
+.rc-slider-dot {
+  border-color: #c7bfbf !important;
+  background-color: #fff !important;
+}
+
+/* 修改「被選取範圍內」刻度點的顏色 */
+.rc-slider-dot-active {
+  border-color: #454141 !important;
+}
+
+/* 如果你想讓點大一點，可以調整寬高 */
+.rc-slider-dot {
+  width: 10px !important;
+  height: 10px !important;
+  bottom: -3px !important;
+}
+
+/* 修改 Tooltip 氣泡的背景顏色與邊框 */
+.rc-slider-tooltip-inner {
+  background-color: #454141 !important; /* 深灰色背景，與你的 track 一致 */
+  border-radius: 4px !important;
+  border: none !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+  font-size: 14px !important;
+  padding: 4px 8px !important;
+  color: #ffffff !important; /* 文字顏色設為白色 */
+}
+
+/* 修改 Tooltip 下方的小箭頭顏色 */
+.rc-slider-tooltip-arrow {
+  border-top-color: #454141 !important; /* 箭頭顏色需與氣泡背景一致 */
+}
+
+.time-btn {
+  background-color: #f0f2f5;
+  color: #4b5563;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 8px 16px;
+  margin: 0 5px;
+  cursor: pointer;
+  font-family: "Microsoft JhengHei", Arial, sans-serif;
+  font-weight: bold;
+  transition: all 0.2s ease-in-out;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.time-btn:hover {
+  background-color: #e5e7eb;
+  border-color: #9ca3af;
+  color: #111827;
+  box-shadow: 0 4px 8px rgba(0, 123, 255, 0.15);
+  transform: translateY(-1px);
+}
+
+.time-btn:active {
+  background-color: #d1d5db;
+  transform: translateY(0);
+}
