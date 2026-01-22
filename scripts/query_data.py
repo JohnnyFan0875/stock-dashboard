@@ -11,11 +11,13 @@ import re
 # =========================
 # Config
 # =========================
-START_DATE = datetime(2025, 9, 19)
-END_DATE = datetime(2025, 10, 8)
-#END_DATE = datetime.today()
 BASE_DIR = "data"
 SLEEP_SEC = 2
+
+latest_folder = sorted(os.listdir(f"{BASE_DIR}/raw"))[-1]
+START_DATE = datetime.strptime(latest_folder, "%Y%m%d") + timedelta(days=1)
+# START_DATE = datetime(2025, 9, 19)
+END_DATE = datetime.today()
 
 
 # =========================
@@ -92,11 +94,6 @@ def main():
             filename = os.path.join(day_dir, f"{title}.csv")
 
             df = pd.DataFrame(table["data"], columns=table["fields"])
-
-            # clean all columns (safe but slower)
-            # for col in df.columns:
-            #     df[col] = clean_numeric_series(df[col])
-
             df.to_csv(filename, index=False)
 
         print(f"Saved {date_str}")

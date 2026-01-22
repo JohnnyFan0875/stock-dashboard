@@ -1,11 +1,11 @@
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import dash
 from dash import dcc, html, ctx
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
-import numpy as np
 from dateutil.relativedelta import relativedelta
 
 # load data
@@ -40,9 +40,9 @@ def calculate_macd(df, fast=12, slow=26, signal=9):
 
 def calculate_signals(df):
     # MA
-    df['ma5'] = df['close'].rolling(5).mean()
-    df['ma10'] = df['close'].rolling(10).mean()
-    df['ma20'] = df['close'].rolling(20).mean()
+    df['MA5'] = df['close'].rolling(5).mean()
+    df['MA10'] = df['close'].rolling(10).mean()
+    df['MA20'] = df['close'].rolling(20).mean()
     
     # 趨勢定義 (Trend OK)
     df['trend_ok'] = (df['DIF'] > 0) & (df['MACD'] > 0) & (df['DIF'] > df['MACD'])
@@ -61,27 +61,26 @@ def calculate_signals(df):
                            (df['bars_after_kd_cross'] <= 2) & \
                            (kd_gap > kd_gap.shift(1)) & \
                            (df['K'] < 80) & \
-                           (df['close'] > df['ma10'])
+                           (df['close'] > df['MA10'])
 
     # Breakout: 趨勢好 + K>50 + 帶量/長紅突破MA10
     df['entry_breakout'] = df['trend_ok'] & (df['K'] > 50) & \
-                           (df['close'] > df['ma10']) & (df['close'].shift(1) <= df['ma10'])
+                           (df['close'] > df['MA10']) & (df['close'].shift(1) <= df['MA10'])
 
     # Continuation: 持續走強
-    df['entry_continuation'] = df['trend_ok'] & (df['K'] > 50) & (df['K'] < 80) & (df['close'] > df['ma10'])
+    df['entry_continuation'] = df['trend_ok'] & (df['K'] > 50) & (df['K'] < 80) & (df['close'] > df['MA10'])
 
     # --- Exit 邏輯 ---
-    # 模擬 ta.barssince(entry) > 5
     df['any_entry'] = df['entry_pullback'] | df['entry_breakout'] | df['entry_continuation']
     df['bars_since_entry'] = df['any_entry'].cumsum()
     df['bars_since_entry'] = df.groupby('any_entry').cumcount() 
     
     exit_allowed = df['bars_since_entry'] > 5
-    exit_price = (df['close'] < df['ma20']) & (df['close'].shift(1) < df['ma20'])
+    exit_price = (df['close'] < df['MA20']) & (df['close'].shift(1) < df['MA20'])
     exit_macd = (df['DIF'] < df['MACD']) & (df['MACD_hist'] < 0) & (df['MACD_hist'] < df['MACD_hist'].shift(1))
     
     df['exit_trend'] = (exit_price | exit_macd) & exit_allowed
-    df['exit_emergency'] = df['close'] < (df['ma20'] * 0.97)
+    df['exit_emergency'] = df['close'] < (df['MA20'] * 0.97)
 
     return df
 
@@ -206,8 +205,6 @@ def sync_top_slider(bottom_val):
 def sync_bottom_slider(top_val):
     return top_val
 
-from dateutil.relativedelta import relativedelta # 建議匯入此套件處理日期加減
-
 @app.callback(
     Output('date-slider-top', 'value', allow_duplicate=True),
     [Input('btn-1m', 'n_clicks'),
@@ -274,16 +271,21 @@ def update_charts(selected_stock, date_range):
     if not date_range or not isinstance(date_range, list) or len(date_range) < 2:
         raise PreventUpdate
     
-    stock_data = df[df['stock_id'] == selected_stock].sort_values('date').copy()
-    if stock_data.empty:
+    full_stock_data = df[df['stock_id'] == selected_stock].sort_values('date').copy()
+    if full_stock_data.empty:
         return go.Figure()
     
+    full_stock_data = calculate_kd(full_stock_data)
+    full_stock_data = calculate_macd(full_stock_data)
+    full_stock_data = calculate_signals(full_stock_data)
+        
     start_dt = pd.to_datetime(date_range[0], unit='s')
     end_dt = pd.to_datetime(date_range[1], unit='s')
-    stock_data = stock_data[(stock_data['date'] >= start_dt) & (stock_data['date'] <= end_dt)]
-    
-    stock_data = calculate_kd(stock_data)
-    stock_data = calculate_macd(stock_data)
+
+    display_data = full_stock_data[(full_stock_data['date'] >= start_dt) & (full_stock_data['date'] <= end_dt)].copy()
+
+    if display_data.empty:
+        return go.Figure()
     
     # set up subplots
     fig = make_subplots(
@@ -297,11 +299,11 @@ def update_charts(selected_stock, date_range):
     # first row: price
     fig.add_trace(
         go.Candlestick(
-            x=stock_data['date'],
-            open=stock_data['open'],
-            high=stock_data['high'],
-            low=stock_data['low'],
-            close=stock_data['close'],
+            x=display_data['date'],
+            open=display_data['open'],
+            high=display_data['high'],
+            low=display_data['low'],
+            close=display_data['close'],
             name="Price",
             increasing_line_color='red', 
             decreasing_line_color='green'    
@@ -315,19 +317,17 @@ def update_charts(selected_stock, date_range):
         ('MA20', 'green')
     ]
 
-    for ma, color in ma_settings:
-        stock_data[ma] = stock_data['close'].rolling(int(ma[2:])).mean()
+    for ma_col, color in ma_settings:
         fig.add_trace(
             go.Scatter(
-                x=stock_data['date'],
-                y=stock_data[ma],
-                name=ma,
+                x=display_data['date'],
+                y=display_data[ma_col],
+                name=ma_col,
                 line=dict(color=color, width=2)
             ),
             row=1, col=1
         )
 
-    stock_data = calculate_signals(stock_data)
     signals = [
         ('entry_pullback', 'EN_P', 'green'),
         ('entry_breakout', 'EN_B', 'green'),
@@ -337,14 +337,14 @@ def update_charts(selected_stock, date_range):
     ]
 
     signal_counts = {}
-    y_gap = stock_data['high'].max() * 0.025
-    base_offset = stock_data['high'].max() * 0.01
+    y_gap = display_data['high'].max() * 0.025
+    base_offset = display_data['high'].max() * 0.01
 
     for col, label, color in signals:
-        mask = stock_data[col] == True
+        mask = display_data[col] == True
         if mask.any():
-            sig_dates = stock_data.loc[mask, 'date']
-            sig_highs = stock_data.loc[mask, 'high']
+            sig_dates = display_data.loc[mask, 'date']
+            sig_highs = display_data.loc[mask, 'high']
 
             y_positions = []
             for d, h in zip(sig_dates, sig_highs):
@@ -379,17 +379,17 @@ def update_charts(selected_stock, date_range):
         
     # second row: kd
     fig.add_trace(
-        go.Scatter(x=stock_data['date'], y=stock_data['K'], 
+        go.Scatter(x=display_data['date'], y=display_data['K'], 
                   mode='lines', name='K line', line=dict(color='blue')),
         row=2, col=1
     )
     fig.add_trace(
-        go.Scatter(x=stock_data['date'], y=stock_data['D'], 
+        go.Scatter(x=display_data['date'], y=display_data['D'], 
                   mode='lines', name='D line', line=dict(color='red')),
         row=2, col=1
     )
 
-    high_k = stock_data[stock_data['K'] > 80]
+    high_k = display_data[display_data['K'] > 80]
     fig.add_trace(
         go.Scatter(
             x=high_k['date'], 
@@ -402,7 +402,7 @@ def update_charts(selected_stock, date_range):
         row=2, col=1
     )
 
-    low_k = stock_data[stock_data['K'] < 20]
+    low_k = display_data[display_data['K'] < 20]
     fig.add_trace(
         go.Scatter(
             x=low_k['date'], 
@@ -417,18 +417,18 @@ def update_charts(selected_stock, date_range):
     
     # third row: macd
     fig.add_trace(
-        go.Scatter(x=stock_data['date'], y=stock_data['DIF'], 
+        go.Scatter(x=display_data['date'], y=display_data['DIF'], 
                   mode='lines', name='DIF', line=dict(color='red')),
         row=3, col=1
     )
     fig.add_trace(
-        go.Scatter(x=stock_data['date'], y=stock_data['MACD'], 
+        go.Scatter(x=display_data['date'], y=display_data['MACD'], 
                   mode='lines', name='MACD', line=dict(color='blue')),
         row=3, col=1
     )
-    colors = ['red' if x >= 0 else 'green' for x in stock_data['MACD_hist']]
+    colors = ['red' if x >= 0 else 'green' for x in display_data['MACD_hist']]
     fig.add_trace(
-        go.Bar(x=stock_data['date'], y=stock_data['MACD_hist'], 
+        go.Bar(x=display_data['date'], y=display_data['MACD_hist'], 
                name='MACD histogram', marker_color=colors, showlegend=False),
         row=3, col=1
     )
@@ -446,8 +446,8 @@ def update_charts(selected_stock, date_range):
         margin=dict(l=65, r=30, t=50, b=50),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         xaxis_rangebreaks=[
-            dict(values=pd.date_range(start=stock_data["date"].min(), end=stock_data["date"].max())
-                 .difference(stock_data["date"]))
+            dict(values=pd.date_range(start=display_data["date"].min(), end=display_data["date"].max())
+                 .difference(display_data["date"]))
         ]
     )
 
