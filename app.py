@@ -38,6 +38,53 @@ def calculate_macd(df, fast=12, slow=26, signal=9):
 
     return df
 
+def calculate_signals(df):
+    # MA
+    df['ma5'] = df['close'].rolling(5).mean()
+    df['ma10'] = df['close'].rolling(10).mean()
+    df['ma20'] = df['close'].rolling(20).mean()
+    
+    # 趨勢定義 (Trend OK)
+    df['trend_ok'] = (df['DIF'] > 0) & (df['MACD'] > 0) & (df['DIF'] > df['MACD'])
+    
+    # KD 交叉與距離上次交叉的天數 (模擬 ta.barssince)
+    df['kd_cross'] = (df['K'] > df['D']) & (df['K'].shift(1) <= df['D'].shift(1))
+    # 計算自上次交叉以來的天數
+    df['bars_after_kd_cross'] = df['kd_cross'].cumsum()
+    df['bars_after_kd_cross'] = df.groupby('bars_after_kd_cross').cumcount()
+    # 如果還沒發生過交叉，設為大數
+    df.loc[df['kd_cross'].cumsum() == 0, 'bars_after_kd_cross'] = 999
+
+    # Pullback: 趨勢好 + KD剛交叉2天內 + KD張口擴大 + 股價高於MA10
+    kd_gap = df['K'] - df['D']
+    df['entry_pullback'] = df['trend_ok'] & \
+                           (df['bars_after_kd_cross'] <= 2) & \
+                           (kd_gap > kd_gap.shift(1)) & \
+                           (df['K'] < 80) & \
+                           (df['close'] > df['ma10'])
+
+    # Breakout: 趨勢好 + K>50 + 帶量/長紅突破MA10
+    df['entry_breakout'] = df['trend_ok'] & (df['K'] > 50) & \
+                           (df['close'] > df['ma10']) & (df['close'].shift(1) <= df['ma10'])
+
+    # Continuation: 持續走強
+    df['entry_continuation'] = df['trend_ok'] & (df['K'] > 50) & (df['K'] < 80) & (df['close'] > df['ma10'])
+
+    # --- Exit 邏輯 ---
+    # 模擬 ta.barssince(entry) > 5
+    df['any_entry'] = df['entry_pullback'] | df['entry_breakout'] | df['entry_continuation']
+    df['bars_since_entry'] = df['any_entry'].cumsum()
+    df['bars_since_entry'] = df.groupby('any_entry').cumcount() 
+    
+    exit_allowed = df['bars_since_entry'] > 5
+    exit_price = (df['close'] < df['ma20']) & (df['close'].shift(1) < df['ma20'])
+    exit_macd = (df['DIF'] < df['MACD']) & (df['MACD_hist'] < 0) & (df['MACD_hist'] < df['MACD_hist'].shift(1))
+    
+    df['exit_trend'] = (exit_price | exit_macd) & exit_allowed
+    df['exit_emergency'] = df['close'] < (df['ma20'] * 0.97)
+
+    return df
+
 
 # Dash app
 app = dash.Dash(__name__)
@@ -279,6 +326,56 @@ def update_charts(selected_stock, date_range):
             ),
             row=1, col=1
         )
+
+    stock_data = calculate_signals(stock_data)
+    signals = [
+        ('entry_pullback', 'EN_P', 'green'),
+        ('entry_breakout', 'EN_B', 'green'),
+        ('entry_continuation', 'EN_C', 'green'),
+        ('exit_trend', 'EX_T', 'red'),
+        ('exit_emergency', 'EX_E', 'red'),
+    ]
+
+    signal_counts = {}
+    y_gap = stock_data['high'].max() * 0.025
+    base_offset = stock_data['high'].max() * 0.01
+
+    for col, label, color in signals:
+        mask = stock_data[col] == True
+        if mask.any():
+            sig_dates = stock_data.loc[mask, 'date']
+            sig_highs = stock_data.loc[mask, 'high']
+
+            y_positions = []
+            for d, h in zip(sig_dates, sig_highs):
+                count = signal_counts.get(d, 0)
+                y_pos = h + base_offset + (count * y_gap)
+                y_positions.append(y_pos)
+                signal_counts[d] = count + 1
+
+            fig.add_trace(
+                go.Scatter(
+                    x=sig_dates,
+                    y=y_positions,
+                    mode="markers+text",
+                    name=label,
+                    text=label,
+                    textposition="top center",
+                    marker=dict(
+                        symbol='triangle-down',
+                        size=10,
+                        color=color
+                    ),
+                    textfont=dict(
+                        color="black",
+                        size=10,
+                        family="Arial"
+                    ),
+                    fillcolor=color, 
+                    hoverinfo='skip'
+                ),
+                row=1, col=1
+            )
         
     # second row: kd
     fig.add_trace(
