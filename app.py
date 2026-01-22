@@ -70,17 +70,22 @@ def calculate_signals(df):
     # Continuation: 持續走強
     df['entry_continuation'] = df['trend_ok'] & (df['K'] > 50) & (df['K'] < 80) & (df['close'] > df['MA10'])
 
-    # --- Exit 邏輯 ---
     df['any_entry'] = df['entry_pullback'] | df['entry_breakout'] | df['entry_continuation']
     df['bars_since_entry'] = df['any_entry'].cumsum()
     df['bars_since_entry'] = df.groupby('any_entry').cumcount() 
     
-    exit_allowed = df['bars_since_entry'] > 5
-    exit_price = (df['close'] < df['MA20']) & (df['close'].shift(1) < df['MA20'])
-    exit_macd = (df['DIF'] < df['MACD']) & (df['MACD_hist'] < 0) & (df['MACD_hist'] < df['MACD_hist'].shift(1))
-    
-    df['exit_trend'] = (exit_price | exit_macd) & exit_allowed
+    # Exit
     df['exit_emergency'] = df['close'] < (df['MA20'] * 0.97)
+
+    exit_allowed = df['bars_since_entry'] > 3
+
+    kd_death_cross = (df['K'] < df['D']) & (df['K'].shift(1) >= df['D'].shift(1))
+    high_level_exit = kd_death_cross & (df['K'] > 70)
+
+    exit_price = (df['close'] < df['MA20'])
+    exit_macd = (df['DIF'] < df['MACD']) & (df['MACD_hist'] < 0)
+    
+    df['exit_trend'] = (exit_price | exit_macd | high_level_exit) & exit_allowed
 
     return df
 

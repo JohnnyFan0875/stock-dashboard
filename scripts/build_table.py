@@ -15,7 +15,7 @@ OUT_FILE_CSV = OUT_DIR / "daily.csv"
 
 # define patterns
 STOCK_PATTERN = re.compile(r"^\d{4}$")   # 2330
-ETF_PATTERN   = re.compile(r"^00\d{2}$") # 0050, 00878
+ETF_PATTERN   = re.compile(r"^00\d{2,3}$") # 0050, 00878
 
 # =========================
 # Helpers
