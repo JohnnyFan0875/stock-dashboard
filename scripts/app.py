@@ -15,7 +15,7 @@ df = pd.read_parquet('data/processed/daily.parquet')
 df = df.sort_values(["stock_id", "date"])
 
 # Dash app
-app = dash.Dash(__name__)
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
 # define stock options
 stock_options = []
@@ -26,78 +26,144 @@ for _, row in unique_stocks.iterrows():
 stock_id_list = [opt["value"] for opt in stock_options]
 
 app.layout = html.Div([
-    html.H1("Dashboard", style={'textAlign': 'center'}),
 
-    html.Div(
-        [
-            html.Button("◀", id="btn-prev-stock", n_clicks=0, className="stock-nav-btn"),
+    html.Div([
+        html.H1("Dashboard", style={'textAlign': 'center', 'margin': '0', 'padding': '20px 0'}),
 
-            dcc.Dropdown(
-                id="stock-dropdown",
-                options=stock_options,
-                value="2330",
-                clearable=False,
-                style={"width": "360px"}
+        dcc.Tabs(
+            id="tabs",
+            value="tab-chart",
+            parent_className="custom-tabs-container",
+            className="custom-tabs",
+            children=[
+                dcc.Tab(
+                    label="Summary Table",
+                    value="tab-table",
+                    className="custom-tab",
+                    selected_className="custom-tab--selected"
+                ),
+                dcc.Tab(
+                    label="Chart",
+                    value="tab-chart",
+                    className="custom-tab",
+                    selected_className="custom-tab--selected"
+                ),
+            ],
+            style={
+                'height': '44px',
+                'display': 'flex',
+                'justifyContent': 'flex-start'
+            }
+        ),
+
+    ], className="top-section"),
+
+    html.Div(id="tab-content")
+])
+
+def render_chart_tab():
+    return html.Div([
+
+        html.Div([
+            html.Div(
+                [
+                    html.Button("◀", id="btn-prev-stock", n_clicks=0, className="stock-nav-btn"),
+                    dcc.Dropdown(
+                        id="stock-dropdown",
+                        options=stock_options,
+                        value="2330",
+                        clearable=False,
+                        style={"width": "360px"}
+                    ),
+                    html.Button("▶", id="btn-next-stock", n_clicks=0, className="stock-nav-btn"),
+                ],
+                style={
+                    "display": "flex",
+                    "alignItems": "center",
+                    "justifyContent": "center",
+                    "gap": "12px",
+                    "marginTop": "50px",
+                    "marginBottom": "10px",
+                    "marginLeft": "70px",
+                }
             ),
 
-            html.Button("▶", id="btn-next-stock", n_clicks=0, className="stock-nav-btn"),
+            html.Div([
+                html.Button("最近一個月", id="btn-1m", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
+                html.Button("最近三個月", id="btn-3m", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
+                html.Button("最近六個月", id="btn-6m", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
+                html.Button("最近一年", id="btn-1y", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
+                html.Button("全部資料", id="btn-all", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
+            ], style={
+                'textAlign': 'right',
+                'marginTop': "50px",
+                "marginBottom": "10px",
+                "marginLeft": "50px",
+            }),
         ],
         style={
             "display": "flex",
             "alignItems": "center",
-            "justifyContent": "center",
-            "gap": "12px",
-            "marginTop": "30px",
-            "marginBottom": "30px",
-        }
-    ),
+            "justifyContent": "space-between",
+            "width": "90%",
+            "margin": "20px 0 0 50px",
+        }),
 
-    html.Div([
-        html.Button("最近一個月", id="btn-1m", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
-        html.Button("最近三個月", id="btn-3m", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
-        html.Button("最近六個月", id="btn-6m", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
-        html.Button("最近一年", id="btn-1y", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
-        html.Button("全部資料", id="btn-all", n_clicks=0, style={'margin': '5px'}, className="time-btn"),
-    ], style={'textAlign': 'right', 'marginRight': '100px'}),
+        html.Div([
+            dcc.RangeSlider(
+                id='date-slider-top',
+                updatemode='mouseup',
+                min=0,
+                max=1,
+                value=[0, 1],
+                tooltip={
+                    "always_visible": False,          
+                    "placement": "top",               
+                    "transform": "transform_to_date"  
+                }
+            )
+        ], style={'width': '90%', 'margin': 'auto', 'padding': '20px'}),
 
-    html.Div([
-        dcc.RangeSlider(
-            id='date-slider-top',
-            updatemode='mouseup',
-            min=0,
-            max=1,
-            value=[0, 1],
-            tooltip={
-                "always_visible": False,          
-                "placement": "top",               
-                "transform": "transform_to_date"  
+        dcc.Graph(
+            id='stock-charts',
+            config={
+                'displayModeBar': False,
+                'scrollZoom': True,
             }
-        )
-    ], style={'width': '90%', 'margin': 'auto', 'padding': '20px'}),
+        ),
 
-    dcc.Graph(
-        id='stock-charts',
-        config={
-            'displayModeBar': False,
-            'scrollZoom': True,
-        }
-    ),
+        html.Div([
+            dcc.RangeSlider(
+                id='date-slider-bottom',
+                updatemode='mouseup',
+                min=0,
+                max=1,
+                value=[0, 1],
+                tooltip={
+                    "always_visible": False,          
+                    "placement": "top",               
+                    "transform": "transform_to_date"  
+                }
+            )
+        ], style={
+            'width': '90%',
+            'margin': 'auto',
+            'padding': '20px'
+        }),
 
-    html.Div([
-        dcc.RangeSlider(
-            id='date-slider-bottom',
-            updatemode='mouseup',
-            min=0,
-            max=1,
-            value=[0, 1],
-            tooltip={
-                "always_visible": False,          
-                "placement": "top",               
-                "transform": "transform_to_date"  
-            }
-        )
-    ], style={'width': '90%', 'margin': 'auto', 'padding': '20px'}),
-])
+    ])
+
+@app.callback(
+    Output("tab-content", "children"),
+    Input("tabs", "value")
+)
+def render_tab(tab):
+    if tab == "tab-chart":
+        return render_chart_tab()
+    elif tab == "tab-table":
+        return html.Div([
+            html.H3("表格整理"),
+        ])
 
 @app.callback(
     [Output('date-slider-top', 'min'), Output('date-slider-top', 'max'), Output('date-slider-top', 'value'), Output('date-slider-top', 'marks'),
