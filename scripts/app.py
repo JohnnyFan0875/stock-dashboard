@@ -8,87 +8,11 @@ from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from dateutil.relativedelta import relativedelta
 
+from strategy import calculate_signals
+
 # load data
 df = pd.read_parquet('data/processed/daily.parquet')
 df = df.sort_values(["stock_id", "date"])
-
-# define functions
-def calculate_kd(df, n=9):
-    low_n  = df['low'].rolling(n, min_periods=1).min()
-    high_n = df['high'].rolling(n, min_periods=1).max()
-
-    denom = high_n - low_n
-    denom = denom.replace(0, np.nan)
-
-    rsv = 100 * (df['close'] - low_n) / denom
-
-    df['K'] = rsv.ewm(alpha=1/3, adjust=False).mean()
-    df['D'] = df['K'].ewm(alpha=1/3, adjust=False).mean()
-
-    return df
-
-
-def calculate_macd(df, fast=12, slow=26, signal=9):
-    ema_fast = df['close'].ewm(span=fast, adjust=False).mean()
-    ema_slow = df['close'].ewm(span=slow, adjust=False).mean()
-
-    df['DIF'] = ema_fast - ema_slow
-    df['MACD'] = df['DIF'].ewm(span=signal, adjust=False).mean()
-    df['MACD_hist'] = df['DIF'] - df['MACD']
-
-    return df
-
-def calculate_signals(df):
-    # MA
-    df['MA5'] = df['close'].rolling(5).mean()
-    df['MA10'] = df['close'].rolling(10).mean()
-    df['MA20'] = df['close'].rolling(20).mean()
-    
-    # 趨勢定義 (Trend OK)
-    df['trend_ok'] = (df['DIF'] > 0) & (df['MACD'] > 0) & (df['DIF'] > df['MACD'])
-    
-    # KD 交叉與距離上次交叉的天數 (模擬 ta.barssince)
-    df['kd_cross'] = (df['K'] > df['D']) & (df['K'].shift(1) <= df['D'].shift(1))
-    # 計算自上次交叉以來的天數
-    df['bars_after_kd_cross'] = df['kd_cross'].cumsum()
-    df['bars_after_kd_cross'] = df.groupby('bars_after_kd_cross').cumcount()
-    # 如果還沒發生過交叉，設為大數
-    df.loc[df['kd_cross'].cumsum() == 0, 'bars_after_kd_cross'] = 999
-
-    # Pullback: 趨勢好 + KD剛交叉2天內 + KD張口擴大 + 股價高於MA10
-    kd_gap = df['K'] - df['D']
-    df['entry_pullback'] = df['trend_ok'] & \
-                           (df['bars_after_kd_cross'] <= 2) & \
-                           (kd_gap > kd_gap.shift(1)) & \
-                           (df['K'] < 80) & \
-                           (df['close'] > df['MA10'])
-
-    # Breakout: 趨勢好 + K>50 + 帶量/長紅突破MA10
-    df['entry_breakout'] = df['trend_ok'] & (df['K'] > 50) & \
-                           (df['close'] > df['MA10']) & (df['close'].shift(1) <= df['MA10'])
-
-    # Continuation: 持續走強
-    df['entry_continuation'] = df['trend_ok'] & (df['K'] > 50) & (df['K'] < 80) & (df['close'] > df['MA10'])
-
-    df['any_entry'] = df['entry_pullback'] | df['entry_breakout'] | df['entry_continuation']
-    df['bars_since_entry'] = df['any_entry'].cumsum()
-    df['bars_since_entry'] = df.groupby('any_entry').cumcount() 
-    
-    # Exit
-    df['exit_emergency'] = df['close'] < (df['MA20'] * 0.97)
-
-    exit_allowed = df['bars_since_entry'] > 3
-
-    kd_death_cross = (df['K'] < df['D']) & (df['K'].shift(1) >= df['D'].shift(1))
-    high_level_exit = kd_death_cross & (df['K'] > 70)
-
-    exit_price = (df['close'] < df['MA20'])
-    exit_macd = (df['DIF'] < df['MACD']) & (df['MACD_hist'] < 0)
-    
-    df['exit_trend'] = (exit_price | exit_macd | high_level_exit) & exit_allowed
-
-    return df
-
 
 # Dash app
 app = dash.Dash(__name__)
@@ -99,14 +23,33 @@ unique_stocks = df[['stock_id', 'stock_name']].drop_duplicates()
 for _, row in unique_stocks.iterrows():
     stock_options.append({'label': f"{row['stock_id']} - {row['stock_name']}", 'value': row['stock_id']})
 
+stock_id_list = [opt["value"] for opt in stock_options]
+
 app.layout = html.Div([
     html.H1("Dashboard", style={'textAlign': 'center'}),
-    
-    dcc.Dropdown(
-        id='stock-dropdown',
-        options=stock_options,
-        value='2330',  # default value
-        style={'width': '50%', 'margin': 'auto', 'marginBottom': '50px', 'marginTop': '50px'}
+
+    html.Div(
+        [
+            html.Button("◀", id="btn-prev-stock", n_clicks=0, className="stock-nav-btn"),
+
+            dcc.Dropdown(
+                id="stock-dropdown",
+                options=stock_options,
+                value="2330",
+                clearable=False,
+                style={"width": "360px"}
+            ),
+
+            html.Button("▶", id="btn-next-stock", n_clicks=0, className="stock-nav-btn"),
+        ],
+        style={
+            "display": "flex",
+            "alignItems": "center",
+            "justifyContent": "center",
+            "gap": "12px",
+            "marginTop": "30px",
+            "marginBottom": "30px",
+        }
     ),
 
     html.Div([
@@ -193,6 +136,31 @@ def update_slider_range(selected_stock, current_range):
     
     return min_ts, max_ts, target_value, marks, min_ts, max_ts, target_value, marks
 
+@app.callback(
+    Output("stock-dropdown", "value"),
+    [
+        Input("btn-prev-stock", "n_clicks"),
+        Input("btn-next-stock", "n_clicks"),
+    ],
+    State("stock-dropdown", "value"),
+    prevent_initial_call=True
+)
+def switch_stock(prev_clicks, next_clicks, current_stock):
+    if current_stock not in stock_id_list:
+        raise PreventUpdate
+
+    current_idx = stock_id_list.index(current_stock)
+    trigger = ctx.triggered_id
+
+    if trigger == "btn-prev-stock":
+        new_idx = max(current_idx - 1, 0)
+    elif trigger == "btn-next-stock":
+        new_idx = min(current_idx + 1, len(stock_id_list) - 1)
+    else:
+        raise PreventUpdate
+
+    return stock_id_list[new_idx]
+
 # link top and bottom slider
 @app.callback(
     Output('date-slider-top', 'value', allow_duplicate=True),
@@ -244,7 +212,6 @@ def update_range_by_button(n1, n3, n6, n1y, nall, selected_stock):
     
     return [int(start_date.timestamp()), int(max_date.timestamp())]
 
-# 1. 讓圖表拖移後，反向更新 Slider 的 Value
 @app.callback(
     [Output('date-slider-top', 'value', allow_duplicate=True),
      Output('date-slider-bottom', 'value', allow_duplicate=True)],
@@ -277,13 +244,10 @@ def update_charts(selected_stock, date_range):
         raise PreventUpdate
     
     full_stock_data = df[df['stock_id'] == selected_stock].sort_values('date').copy()
+    full_stock_data = calculate_signals(full_stock_data)
     if full_stock_data.empty:
         return go.Figure()
-    
-    full_stock_data = calculate_kd(full_stock_data)
-    full_stock_data = calculate_macd(full_stock_data)
-    full_stock_data = calculate_signals(full_stock_data)
-        
+            
     start_dt = pd.to_datetime(date_range[0], unit='s')
     end_dt = pd.to_datetime(date_range[1], unit='s')
 
@@ -334,6 +298,7 @@ def update_charts(selected_stock, date_range):
         )
 
     signals = [
+        ('entry_pre_pullback', 'EN_PP', 'orange'),
         ('entry_pullback', 'EN_P', 'green'),
         ('entry_breakout', 'EN_B', 'green'),
         ('entry_continuation', 'EN_C', 'green'),
@@ -342,7 +307,7 @@ def update_charts(selected_stock, date_range):
     ]
 
     signal_counts = {}
-    y_gap = display_data['high'].max() * 0.025
+    y_gap = display_data['high'].max() * 0.015
     base_offset = display_data['high'].max() * 0.01
 
     for col, label, color in signals:
@@ -365,7 +330,7 @@ def update_charts(selected_stock, date_range):
                     mode="markers+text",
                     name=label,
                     text=label,
-                    textposition="top center",
+                    textposition="middle right",
                     marker=dict(
                         symbol='triangle-down',
                         size=10,

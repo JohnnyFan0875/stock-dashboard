@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import os
 import re
 from pathlib import Path
@@ -35,6 +36,31 @@ def clean_numeric(s):
         errors="coerce"
     )
 
+def add_ma_features(df):
+    df["MA5"]  = df["close"].rolling(5).mean()
+    df["MA10"] = df["close"].rolling(10).mean()
+    df["MA20"] = df["close"].rolling(20).mean()
+    return df
+
+def add_kd_features(df, n=9):
+    low_n  = df["low"].rolling(n, min_periods=1).min()
+    high_n = df["high"].rolling(n, min_periods=1).max()
+
+    denom = (high_n - low_n).replace(0, np.nan)
+    rsv = 100 * (df["close"] - low_n) / denom
+
+    df["K"] = rsv.ewm(alpha=1/3, adjust=False).mean()
+    df["D"] = df["K"].ewm(alpha=1/3, adjust=False).mean()
+    return df
+
+def add_macd_features(df, fast=12, slow=26, signal=9):
+    ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
+    ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
+
+    df["DIF"] = ema_fast - ema_slow
+    df["MACD"] = df["DIF"].ewm(span=signal, adjust=False).mean()
+    df["MACD_hist"] = df["DIF"] - df["MACD"]
+    return df
 
 # =========================
 # Main
@@ -106,14 +132,18 @@ if not all_rows:
 
 final_df = (
     pd.concat(all_rows, ignore_index=True)
-      .sort_values(["stock_id", "date"])
+    .sort_values(["stock_id", "date"])
+    .groupby("stock_id", group_keys=False)
+    .apply(add_ma_features)
+    .pipe(lambda d: d.groupby("stock_id", group_keys=False).apply(add_kd_features))
+    .pipe(lambda d: d.groupby("stock_id", group_keys=False).apply(add_macd_features))
 )
 
 print(final_df.dtypes)
 bad_rows = final_df[
     final_df["open"].apply(lambda x: isinstance(x, str))
 ]
-print(bad_rows[["date", "stock_id", "stock_name", "open"]].head(20))
+print(bad_rows[["date", "stock_id", "stock_name", "open"]].head())
 
 
 final_df.to_parquet(OUT_FILE_PARQUET, index=False)
