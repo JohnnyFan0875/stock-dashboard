@@ -11,8 +11,10 @@ RAW_DIR = Path("data/raw")
 OUT_DIR = Path("data/processed")
 OUT_DIR.mkdir(exist_ok=True)
 
-OUT_FILE_PARQUET = OUT_DIR / "daily.parquet"
-OUT_FILE_CSV = OUT_DIR / "daily.csv"
+OUT_FILE_DAILY_PARQUET = OUT_DIR / "daily.parquet"
+OUT_FILE_DAILY_CSV = OUT_DIR / "daily.csv"
+OUT_FILE_SUMMARY_PARQUET = OUT_DIR / "summary.parquet"
+OUT_FILE_SUMMARY_CSV = OUT_DIR / "summary.csv"
 
 # define patterns
 STOCK_PATTERN = re.compile(r"^\d{4}$")   # 2330
@@ -139,14 +141,54 @@ final_df = (
     .pipe(lambda d: d.groupby("stock_id", group_keys=False).apply(add_macd_features))
 )
 
-print(final_df.dtypes)
+# =========================
+# Build summary table
+# =========================
+summary_rows = []
+
+for stock_id, g in final_df.groupby("stock_id"):
+    g = g.sort_values("date")
+    last = g.iloc[-1]
+
+    # 日漲跌 %
+    change_pct = (
+        (last["close"] - g.iloc[-2]["close"]) / g.iloc[-2]["close"] * 100
+        if len(g) >= 2 else np.nan
+    )
+
+    # 5 日均量比
+    vol_ma5 = g["volume"].tail(5).mean()
+    volume_ratio_5d = last["volume"] / vol_ma5 if vol_ma5 else np.nan
+
+    # 3 日漲跌 %
+    close_3d_change_pct = (
+        (last["close"] - g.iloc[-4]["close"]) / g.iloc[-4]["close"] * 100
+        if len(g) >= 4 else np.nan
+    )
+
+    summary_rows.append({
+        "stock_id": stock_id,
+        "stock_name": last["stock_name"],
+        "date": last["date"],
+        "close": round(last["close"], 2),
+        "change_pct": round(change_pct, 2),
+        "volume_ratio_5d": round(volume_ratio_5d, 2),
+        "K": round(last["K"], 1),
+        "DIF": round(last["DIF"], 2),
+        "close_3d_change_pct": round(close_3d_change_pct, 2),
+    })
+
+summary_df = pd.DataFrame(summary_rows)
+
+# =========================
+# Build daily/summary table
+# =========================
 bad_rows = final_df[
     final_df["open"].apply(lambda x: isinstance(x, str))
 ]
-print(bad_rows[["date", "stock_id", "stock_name", "open"]].head())
 
+final_df.to_parquet(OUT_FILE_DAILY_PARQUET, index=False)
+final_df.to_csv(OUT_FILE_DAILY_CSV, index=False)
 
-final_df.to_parquet(OUT_FILE_PARQUET, index=False)
-final_df.to_csv(OUT_FILE_CSV, index=False)
-
-print(final_df.head())
+summary_df.to_parquet(OUT_FILE_SUMMARY_PARQUET, index=False)
+summary_df.to_csv(OUT_FILE_SUMMARY_CSV, index=False)

@@ -3,63 +3,12 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import dash
-from dash import dcc, html, ctx
+from dash import dcc, html, ctx, dash_table
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from dateutil.relativedelta import relativedelta
 
 from strategy import calculate_signals
-
-# load data
-df = pd.read_parquet('data/processed/daily.parquet')
-df = df.sort_values(["stock_id", "date"])
-
-# Dash app
-app = dash.Dash(__name__, suppress_callback_exceptions=True)
-
-# define stock options
-stock_options = []
-unique_stocks = df[['stock_id', 'stock_name']].drop_duplicates()
-for _, row in unique_stocks.iterrows():
-    stock_options.append({'label': f"{row['stock_id']} - {row['stock_name']}", 'value': row['stock_id']})
-
-stock_id_list = [opt["value"] for opt in stock_options]
-
-app.layout = html.Div([
-
-    html.Div([
-        html.H1("Dashboard", style={'textAlign': 'center', 'margin': '0', 'padding': '20px 0'}),
-
-        dcc.Tabs(
-            id="tabs",
-            value="tab-chart",
-            parent_className="custom-tabs-container",
-            className="custom-tabs",
-            children=[
-                dcc.Tab(
-                    label="Summary Table",
-                    value="tab-table",
-                    className="custom-tab",
-                    selected_className="custom-tab--selected"
-                ),
-                dcc.Tab(
-                    label="Chart",
-                    value="tab-chart",
-                    className="custom-tab",
-                    selected_className="custom-tab--selected"
-                ),
-            ],
-            style={
-                'height': '44px',
-                'display': 'flex',
-                'justifyContent': 'flex-start'
-            }
-        ),
-
-    ], className="top-section"),
-
-    html.Div(id="tab-content")
-])
 
 def render_chart_tab():
     return html.Div([
@@ -153,17 +102,226 @@ def render_chart_tab():
 
     ])
 
+def render_summary_tab():
+
+    return html.Div(
+
+        className="summary-table-wrapper",
+        children=[
+
+            html.Div(
+                html.Button(
+                    "Reset",
+                    id="summary-reset-btn",
+                    n_clicks=0,
+                    className="reset-btn"
+                ),
+                id="summary-reset-wrapper",
+                style={"display": "none", "textAlign": "right", "marginBottom": "6px"}
+            ),
+
+            dash_table.DataTable(
+                id="summary-table",
+                data=summary_view_df.to_dict("records"),
+                columns=[
+                    {"name": "代碼", "id": "stock_id"},
+                    {"name": "名稱", "id": "stock_name"},
+                    {"name": "收盤價", "id": "close"},
+                    {"name": "日變動 %", "id": "change_pct"},
+                    {"name": "量比(5D)", "id": "volume_ratio_5d"},
+                    {"name": "趨勢", "id": "trend_ok"},
+                    {"name": "訊號", "id": "signal_today"},
+                    {"name": "距進場(日)", "id": "bars_since_entry"},
+                    {"name": "K", "id": "K"},
+                    {"name": "DIF", "id": "DIF"},
+                    {"name": "3日漲跌 %", "id": "close_3d_change_pct"},
+                ],
+                sort_action="native",
+                sort_by=[],
+                filter_action="native",
+                filter_query="",
+                page_action="native",
+                page_current=0,
+                page_size=20,
+                cell_selectable=True,
+                style_table={"overflowX": "auto"},
+                style_cell={
+                    "textAlign": "center",
+                    "fontFamily": "Arial",
+                    "fontSize": "13px",
+                    "padding": "6px",
+                },
+                style_header={
+                    "backgroundColor": "#F0F0F0",
+                    "fontWeight": "bold",
+                },
+                style_data_conditional=[
+                    {
+                        "if": {"filter_query": "{signal_today} != 'none'"},
+                        "backgroundColor": "#FFF4E5",
+                    },
+                    {
+                        "if": {"filter_query": "{change_pct} > 0"},
+                        "color": "red",
+                    },
+                    {
+                        "if": {"filter_query": "{change_pct} < 0"},
+                        "color": "green",
+                    },
+                ],
+            )  
+        ]
+    )
+
+def enrich_summary_with_strategy(summary_df, daily_df, lookback=60):
+    rows = []
+
+    for _, row in summary_df.iterrows():
+        sid = row["stock_id"]
+
+        g = (
+            daily_df[daily_df["stock_id"] == sid]
+            .sort_values("date")
+            .tail(lookback)
+            .copy()
+        )
+
+        if len(g) < 2:
+            row["trend_ok"] = False
+            row["signal_today"] = "none"
+            row["bars_since_entry"] = None
+            rows.append(row)
+            continue
+
+        g = calculate_signals(g)
+        last = g.iloc[-1]
+
+        # 補三個欄位
+        row["trend_ok"] = bool(last["trend_ok"])
+        row["bars_since_entry"] = int(last["bars_since_entry"])
+
+        signals_today = []
+
+        if last["entry_pullback"]:
+            signals_today.append("pullback")
+        if last["entry_breakout"]:
+            signals_today.append("breakout")
+        if last["entry_continuation"]:
+            signals_today.append("continuation")
+        if last["exit_trend"]:
+            signals_today.append("exit")
+
+        row["signal_today"] = "+".join(signals_today) if signals_today else "none"
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+# load data
+df = pd.read_parquet('data/processed/daily.parquet')
+df = df.sort_values(["stock_id", "date"])
+
+summary_df = pd.read_parquet('data/processed/summary.parquet')
+summary_view_df = enrich_summary_with_strategy(summary_df, df)
+
+# Dash app
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
+
+# define stock options
+stock_options = []
+unique_stocks = df[['stock_id', 'stock_name']].drop_duplicates()
+for _, row in unique_stocks.iterrows():
+    stock_options.append({'label': f"{row['stock_id']} - {row['stock_name']}", 'value': row['stock_id']})
+
+stock_id_list = [opt["value"] for opt in stock_options]
+
+app.layout = html.Div([
+
+    dcc.Store(
+        id="summary-clicked-stock",
+        storage_type="memory"
+    ),
+
+    html.Div([
+        html.H1("Dashboard", style={'textAlign': 'center', 'margin': '0', 'padding': '20px 0'}),
+
+        dcc.Tabs(
+            id="tabs",
+            value="tab-chart",
+            parent_className="custom-tabs-container",
+            className="custom-tabs",
+            children=[
+                dcc.Tab(
+                    label="Summary Table",
+                    value="tab-table",
+                    className="custom-tab",
+                    selected_className="custom-tab--selected"
+                ),
+                dcc.Tab(
+                    label="Chart",
+                    value="tab-chart",
+                    className="custom-tab",
+                    selected_className="custom-tab--selected"
+                ),
+            ],
+            style={
+                'height': '44px',
+                'display': 'flex',
+                'justifyContent': 'flex-start'
+            }
+        ),
+
+    ], className="top-section"),
+
+    html.Div(
+        id="tab-content",
+        children=[
+            html.Div(render_summary_tab(), id="tab-table-div", style={"display": "none"}),
+            html.Div(render_chart_tab(), id="tab-chart-div", style={"display": "block"}),
+        ]
+    )
+])
+
 @app.callback(
-    Output("tab-content", "children"),
-    Input("tabs", "value")
+    [
+        Output("tab-table-div", "style"),
+        Output("tab-chart-div", "style"),
+    ],
+    Input("tabs", "value"),
 )
-def render_tab(tab):
-    if tab == "tab-chart":
-        return render_chart_tab()
-    elif tab == "tab-table":
-        return html.Div([
-            html.H3("表格整理"),
-        ])
+def switch_tab(tab):
+    if tab == "tab-table":
+        return {"display": "block"}, {"display": "none"}
+    return {"display": "none"}, {"display": "block"}
+
+@app.callback(
+    Output("summary-reset-wrapper", "style"),
+    [
+        Input("summary-table", "filter_query"),
+        Input("summary-table", "sort_by"),
+    ]
+)
+def toggle_reset_button(filter_query, sort_by):
+    has_filter = filter_query is not None and filter_query != ""
+    has_sort = sort_by is not None and len(sort_by) > 0
+
+    if has_filter or has_sort:
+        return {"display": "block", "textAlign": "right", "marginBottom": "6px"}
+
+    return {"display": "none"}
+
+@app.callback(
+    [
+        Output("summary-table", "filter_query"),
+        Output("summary-table", "sort_by"),
+        Output("summary-table", "page_current"),
+    ],
+    Input("summary-reset-btn", "n_clicks"),
+    prevent_initial_call=True
+)
+def reset_summary_table(n):
+    return "", [], 0
+
 
 @app.callback(
     [Output('date-slider-top', 'min'), Output('date-slider-top', 'max'), Output('date-slider-top', 'value'), Output('date-slider-top', 'marks'),
@@ -298,6 +456,38 @@ def update_sliders_from_chart(relayoutData):
             raise PreventUpdate
             
     raise PreventUpdate
+
+@app.callback(
+    [
+        Output("summary-clicked-stock", "data"),
+        Output("tabs", "value"),
+    ],
+    Input("summary-table", "active_cell"),
+    State("summary-table", "derived_viewport_data"),
+    prevent_initial_call=True
+)
+def jump_to_chart(active_cell, table_data):
+    if not active_cell:
+        raise PreventUpdate
+    
+    if active_cell["column_id"] not in ["stock_id", "stock_name"]:
+        raise PreventUpdate
+
+    row = active_cell["row"]
+    stock_id = table_data[row]["stock_id"]
+
+    return stock_id, "tab-chart"
+
+@app.callback(
+    Output("stock-dropdown", "value", allow_duplicate=True),
+    Input("summary-clicked-stock", "data"),
+    prevent_initial_call=True
+)
+def update_stock_from_summary(stock_id):
+    if not stock_id:
+        raise PreventUpdate
+    return stock_id
+
 
 @app.callback(
     Output('stock-charts', 'figure'),
