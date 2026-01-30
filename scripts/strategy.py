@@ -1,19 +1,23 @@
 import pandas as pd
 import numpy as np
 
+# =========================
+# Signal Labeling
+# =========================
+def get_signal_label(r):
+    sig_list = []
+    if r["entry_pullback"]: sig_list.append("pullback")
+    if r["entry_breakout"]: sig_list.append("breakout")
+    if r["entry_continuation"]: sig_list.append("continuation")
+    if r["exit_trend"]: sig_list.append("exit")
+    if r["exit_emergency"]: sig_list.append("emergency")
+    
+    return "+".join(sig_list) if sig_list else "none"
+
 
 def calculate_signals(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.sort_values("date").copy()
-
-    # =========================
-    # Trend definition
-    # =========================
-    df["trend_ok"] = (
-        (df["DIF"] > 0) &
-        (df["MACD"] > 0) &
-        (df["DIF"] > df["MACD"])
-    )
 
     # =========================
     # KD cross & bars since cross
@@ -35,14 +39,18 @@ def calculate_signals(df: pd.DataFrame) -> pd.DataFrame:
     # Entry strategies
     # =========================
     df["entry_pre_pullback"] = (
-        df["trend_ok"] &
+        (df["DIF"] > 0) &
+        (df["MACD"] > 0) &
+        (df["DIF"] > df["MACD"]) &
         (df["K"] < df["D"]) &
         ((df["D"] - df["K"]) < 3) &
         (df["close"] > df["MA10"])
     )
 
     df["entry_pullback"] = (
-        df["trend_ok"] &
+        (df["DIF"] > 0) &
+        (df["MACD"] > 0) &
+        (df["DIF"] > df["MACD"]) &
         (df["bars_after_kd_cross"] <= 2) &
         (kd_gap > kd_gap.shift(1)) &
         (df["K"] < 80) &
@@ -50,14 +58,18 @@ def calculate_signals(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     df["entry_breakout"] = (
-        df["trend_ok"] &
+        (df["DIF"] > 0) &
+        (df["MACD"] > 0) &
+        (df["DIF"] > df["MACD"]) &
         (df["K"] > 50) &
         (df["close"] > df["MA10"]) &
         (df["close"].shift(1) <= df["MA10"])
     )
 
     df["entry_continuation"] = (
-        df["trend_ok"] &
+        (df["DIF"] > 0) &
+        (df["MACD"] > 0) &
+        (df["DIF"] > df["MACD"]) &
         (df["K"] > 50) &
         (df["K"] < 80) &
         (df["close"] > df["MA10"])
@@ -69,8 +81,8 @@ def calculate_signals(df: pd.DataFrame) -> pd.DataFrame:
         df["entry_continuation"]
     )
 
-    df["bars_since_entry"] = df["any_entry"].cumsum()
-    df["bars_since_entry"] = df.groupby("any_entry").cumcount()
+    entry_groups = df["any_entry"].cumsum()
+    df["bars_since_entry"] = df.groupby(entry_groups).cumcount()
 
     # =========================
     # Exit strategies
@@ -93,5 +105,10 @@ def calculate_signals(df: pd.DataFrame) -> pd.DataFrame:
         (exit_price | exit_macd | high_level_exit) &
         exit_allowed
     )
+
+    # =========================
+    # Signal labeling
+    # =========================
+    df["signal_today"] = df.apply(get_signal_label, axis=1)
 
     return df

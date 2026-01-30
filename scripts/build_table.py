@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
-import os
 import re
 from pathlib import Path
+
+from strategy import calculate_signals
 
 # =========================
 # Config
@@ -12,12 +13,10 @@ OUT_DIR = Path("data/processed")
 OUT_DIR.mkdir(exist_ok=True)
 
 OUT_FILE_DAILY_PARQUET = OUT_DIR / "daily.parquet"
-OUT_FILE_DAILY_CSV = OUT_DIR / "daily.csv"
 OUT_FILE_SUMMARY_PARQUET = OUT_DIR / "summary.parquet"
-OUT_FILE_SUMMARY_CSV = OUT_DIR / "summary.csv"
 
 # define patterns
-STOCK_PATTERN = re.compile(r"^\d{4}$")   # 2330
+STOCK_PATTERN = re.compile(r"^\d{4}$")     # 2330
 ETF_PATTERN   = re.compile(r"^00\d{2,3}$") # 0050, 00878
 
 # =========================
@@ -27,7 +26,6 @@ def is_stock_or_etf(code: str) -> bool:
     if not isinstance(code, str):
         return False
     return bool(STOCK_PATTERN.match(code) or ETF_PATTERN.match(code))
-
 
 def clean_numeric(s):
     return pd.to_numeric(
@@ -51,16 +49,16 @@ def add_kd_features(df, n=9):
     denom = (high_n - low_n).replace(0, np.nan)
     rsv = 100 * (df["close"] - low_n) / denom
 
-    df["K"] = rsv.ewm(alpha=1/3, adjust=False).mean()
-    df["D"] = df["K"].ewm(alpha=1/3, adjust=False).mean()
+    df["K"] = rsv.ewm(alpha=1/3, adjust=False).mean().round(2)
+    df["D"] = df["K"].ewm(alpha=1/3, adjust=False).mean().round(2)
     return df
 
 def add_macd_features(df, fast=12, slow=26, signal=9):
     ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
     ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
 
-    df["DIF"] = ema_fast - ema_slow
-    df["MACD"] = df["DIF"].ewm(span=signal, adjust=False).mean()
+    df["DIF"] = (ema_fast - ema_slow).round(2)
+    df["MACD"] = df["DIF"].ewm(span=signal, adjust=False).mean().round(2)
     df["MACD_hist"] = df["DIF"] - df["MACD"]
     return df
 
@@ -108,7 +106,7 @@ for day_dir in sorted(RAW_DIR.iterdir()):
     df["high"]   = clean_numeric(df["最高價"])
     df["low"]    = clean_numeric(df["最低價"])
     df["close"]  = clean_numeric(df["收盤價"])
-    df["volume"] = clean_numeric(df["成交股數"])
+    df["volume"] = (clean_numeric(df["成交股數"]) / 1000).round(2)
 
     # add date
     df["date"] = pd.to_datetime(date_str)
@@ -141,54 +139,27 @@ final_df = (
     .pipe(lambda d: d.groupby("stock_id", group_keys=False).apply(add_macd_features))
 )
 
-# =========================
-# Build summary table
-# =========================
-summary_rows = []
+# Add other indicators
+final_df['close_change_pct'] = (
+    final_df.groupby("stock_id")["close"]
+    .pct_change() * 100
+).round(2)
 
-for stock_id, g in final_df.groupby("stock_id"):
-    g = g.sort_values("date")
-    last = g.iloc[-1]
+final_df['close_3d_change_pct'] = (
+    final_df.groupby("stock_id")["close"]
+    .transform(lambda x: (x - x.shift(3)) / x.shift(3) * 100)
+).round(2)
 
-    # 日漲跌 %
-    change_pct = (
-        (last["close"] - g.iloc[-2]["close"]) / g.iloc[-2]["close"] * 100
-        if len(g) >= 2 else np.nan
-    )
+final_df['vol_ma5'] = final_df.groupby("stock_id")["volume"].transform(lambda x: x.rolling(5).mean())
+final_df['volume_ratio_5d'] = (final_df['volume'] / final_df['vol_ma5']).round(2)
 
-    # 5 日均量比
-    vol_ma5 = g["volume"].tail(5).mean()
-    volume_ratio_5d = last["volume"] / vol_ma5 if vol_ma5 else np.nan
+# Add signals
+final_df = final_df.groupby("stock_id", group_keys=False).apply(calculate_signals)
 
-    # 3 日漲跌 %
-    close_3d_change_pct = (
-        (last["close"] - g.iloc[-4]["close"]) / g.iloc[-4]["close"] * 100
-        if len(g) >= 4 else np.nan
-    )
-
-    summary_rows.append({
-        "stock_id": stock_id,
-        "stock_name": last["stock_name"],
-        "date": last["date"],
-        "close": round(last["close"], 2),
-        "change_pct": round(change_pct, 2),
-        "volume_ratio_5d": round(volume_ratio_5d, 2),
-        "K": round(last["K"], 1),
-        "DIF": round(last["DIF"], 2),
-        "close_3d_change_pct": round(close_3d_change_pct, 2),
-    })
-
-summary_df = pd.DataFrame(summary_rows)
-
-# =========================
-# Build daily/summary table
-# =========================
-bad_rows = final_df[
-    final_df["open"].apply(lambda x: isinstance(x, str))
-]
+summary_df = final_df.groupby("stock_id").tail(1).copy()
 
 final_df.to_parquet(OUT_FILE_DAILY_PARQUET, index=False)
-final_df.to_csv(OUT_FILE_DAILY_CSV, index=False)
-
 summary_df.to_parquet(OUT_FILE_SUMMARY_PARQUET, index=False)
-summary_df.to_csv(OUT_FILE_SUMMARY_CSV, index=False)
+
+print(f"Successfully saved {OUT_FILE_DAILY_PARQUET}")
+print(f"Successfully saved {OUT_FILE_SUMMARY_PARQUET}")

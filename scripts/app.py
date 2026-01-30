@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import dash
@@ -7,8 +6,6 @@ from dash import dcc, html, ctx, dash_table
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from dateutil.relativedelta import relativedelta
-
-from strategy import calculate_signals
 
 def render_chart_tab():
     return html.Div([
@@ -122,19 +119,19 @@ def render_summary_tab():
 
             dash_table.DataTable(
                 id="summary-table",
-                data=summary_view_df.to_dict("records"),
+                data=summary_df.to_dict("records"),
                 columns=[
                     {"name": "代碼", "id": "stock_id"},
                     {"name": "名稱", "id": "stock_name"},
                     {"name": "收盤價", "id": "close"},
-                    {"name": "日變動 %", "id": "change_pct"},
-                    {"name": "量比(5D)", "id": "volume_ratio_5d"},
-                    {"name": "趨勢", "id": "trend_ok"},
+                    {"name": "日變動 %", "id": "close_change_pct"},
+                    {"name": "3日漲跌 %", "id": "close_3d_change_pct"},
+                    {"name": "交易量(張)", "id": "volume"},
+                    {"name": "量比 (5D)", "id": "volume_ratio_5d"},
                     {"name": "訊號", "id": "signal_today"},
                     {"name": "距進場(日)", "id": "bars_since_entry"},
                     {"name": "K", "id": "K"},
                     {"name": "DIF", "id": "DIF"},
-                    {"name": "3日漲跌 %", "id": "close_3d_change_pct"},
                 ],
                 sort_action="native",
                 sort_by=[],
@@ -161,11 +158,11 @@ def render_summary_tab():
                         "backgroundColor": "#FFF4E5",
                     },
                     {
-                        "if": {"filter_query": "{change_pct} > 0"},
+                        "if": {"filter_query": "{close_change_pct} > 0"},
                         "color": "red",
                     },
                     {
-                        "if": {"filter_query": "{change_pct} < 0"},
+                        "if": {"filter_query": "{close_change_pct} < 0"},
                         "color": "green",
                     },
                 ],
@@ -173,56 +170,11 @@ def render_summary_tab():
         ]
     )
 
-def enrich_summary_with_strategy(summary_df, daily_df, lookback=60):
-    rows = []
-
-    for _, row in summary_df.iterrows():
-        sid = row["stock_id"]
-
-        g = (
-            daily_df[daily_df["stock_id"] == sid]
-            .sort_values("date")
-            .tail(lookback)
-            .copy()
-        )
-
-        if len(g) < 2:
-            row["trend_ok"] = False
-            row["signal_today"] = "none"
-            row["bars_since_entry"] = None
-            rows.append(row)
-            continue
-
-        g = calculate_signals(g)
-        last = g.iloc[-1]
-
-        # 補三個欄位
-        row["trend_ok"] = bool(last["trend_ok"])
-        row["bars_since_entry"] = int(last["bars_since_entry"])
-
-        signals_today = []
-
-        if last["entry_pullback"]:
-            signals_today.append("pullback")
-        if last["entry_breakout"]:
-            signals_today.append("breakout")
-        if last["entry_continuation"]:
-            signals_today.append("continuation")
-        if last["exit_trend"]:
-            signals_today.append("exit")
-
-        row["signal_today"] = "+".join(signals_today) if signals_today else "none"
-
-        rows.append(row)
-
-    return pd.DataFrame(rows)
-
 # load data
 df = pd.read_parquet('data/processed/daily.parquet')
 df = df.sort_values(["stock_id", "date"])
 
 summary_df = pd.read_parquet('data/processed/summary.parquet')
-summary_view_df = enrich_summary_with_strategy(summary_df, df)
 
 # Dash app
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
@@ -247,7 +199,7 @@ app.layout = html.Div([
 
         dcc.Tabs(
             id="tabs",
-            value="tab-chart",
+            value="tab-table",
             parent_className="custom-tabs-container",
             className="custom-tabs",
             children=[
@@ -500,7 +452,6 @@ def update_charts(selected_stock, date_range):
         raise PreventUpdate
     
     full_stock_data = df[df['stock_id'] == selected_stock].sort_values('date').copy()
-    full_stock_data = calculate_signals(full_stock_data)
     if full_stock_data.empty:
         return go.Figure()
             

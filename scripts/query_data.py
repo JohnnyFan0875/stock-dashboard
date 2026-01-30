@@ -14,9 +14,11 @@ import re
 BASE_DIR = "data"
 SLEEP_SEC = 2
 
-latest_folder = sorted(os.listdir(f"{BASE_DIR}/raw"))[-1]
-START_DATE = datetime.strptime(latest_folder, "%Y%m%d") + timedelta(days=1)
-# START_DATE = datetime(2025, 9, 19)
+try:
+    latest_folder = sorted(os.listdir(f"{BASE_DIR}/raw"))[-1]
+    START_DATE = datetime.strptime(latest_folder, "%Y%m%d") + timedelta(days=1)
+except:
+    START_DATE = datetime(2024, 1, 1)
 END_DATE = datetime.today()
 
 
