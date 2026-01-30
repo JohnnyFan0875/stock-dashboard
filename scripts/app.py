@@ -101,10 +101,23 @@ def render_chart_tab():
 
 def render_summary_tab():
 
+    available_dates = sorted(df['date'].unique(), reverse=True)
+
     return html.Div(
 
         className="summary-table-wrapper",
         children=[
+
+            html.Div([
+                html.Label("選擇交易日：", style={"marginRight": "10px"}),
+                dcc.Dropdown(
+                    id="summary-date-dropdown",
+                    options=[{'label': d.strftime('%Y-%m-%d'), 'value': d} for d in available_dates],
+                    value=available_dates[0],
+                    clearable=False,
+                    style={"width": "200px"}
+                ),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "20px"}),
 
             html.Div(
                 html.Button(
@@ -172,9 +185,11 @@ def render_summary_tab():
 
 # load data
 df = pd.read_parquet('data/processed/daily.parquet')
+df['date'] = pd.to_datetime(df['date'])
 df = df.sort_values(["stock_id", "date"])
 
-summary_df = pd.read_parquet('data/processed/summary.parquet')
+latest_date = df['date'].max()
+summary_df = df[df['date'] == latest_date]
 
 # Dash app
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
@@ -235,6 +250,14 @@ app.layout = html.Div([
 ])
 
 @app.callback(
+    Output("summary-table", "data"),
+    Input("summary-date-dropdown", "value")
+)
+def update_summary_table_by_date(selected_date):
+    filtered_df = df[df['date'] == selected_date]
+    return filtered_df.to_dict("records")
+
+@app.callback(
     [
         Output("tab-table-div", "style"),
         Output("tab-chart-div", "style"),
@@ -285,19 +308,27 @@ def update_slider_range(selected_stock, current_range):
     stock_data = df[df['stock_id'] == selected_stock]
     dates = pd.to_datetime(stock_data['date']).sort_values()
 
+    min_date = dates.min()
+    max_date = dates.max()
+
     min_ts = int(dates.min().timestamp())
     max_ts = int(dates.max().timestamp())
 
-    if current_range and isinstance(current_range, list):
+    one_month_ago_ts = int((max_date - relativedelta(months=1)).timestamp())
+    default_start_ts = max(min_ts, one_month_ago_ts)
+
+    if current_range is None or current_range == [0, 1]:
+        target_value = [default_start_ts, max_ts]
+    elif isinstance(current_range, list):
         new_start = max(min_ts, current_range[0])
         new_end = min(max_ts, current_range[1])
         
         if new_start < new_end:
             target_value = [new_start, new_end]
         else:
-            target_value = [min_ts, max_ts]
+            target_value = [default_start_ts, max_ts]
     else:
-        target_value = [min_ts, max_ts]
+        target_value = [default_start_ts, max_ts]
     
     mark_dates = pd.date_range(start=dates.min(), end=dates.max(), periods=15)
     marks = {
