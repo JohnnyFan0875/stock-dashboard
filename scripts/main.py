@@ -1,5 +1,6 @@
 import subprocess
 import query_data
+import sys
 
 def main():
 
@@ -9,10 +10,10 @@ def main():
 
     # Step 2: Build tables (Process raw CSVs into Parquet)
     print(f"\n--- Step 2: Processing data ---")
-    subprocess.run(["python3", "scripts/build_table.py"])
+    subprocess.run([sys.executable, "scripts/build_table.py"], check=True)
 
     # Step 3: Launch Dashboard
-    subprocess.run(["python3", "scripts/app.py"])
+    subprocess.run([sys.executable, "scripts/app.py"], check=True)
 
 if __name__ == "__main__":
     main()
